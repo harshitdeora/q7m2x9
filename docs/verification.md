@@ -13,12 +13,15 @@
 - Local Docker Compose image built and started successfully; container reports healthy. In-container HTTP checks returned 200 for the React page and 24-hour coverage for the Python decision endpoint.
 - Browser checks: decision workspace and accuracy view load real data; changing the cutoff from 10:00 to 16:00 changes the selected publication from 09:30 to 15:30 and updates the forecast energy from 191.4 to 198.2 GWh.
 - Phone-width layout inspected: document clientWidth and scrollWidth were both 375 px (no horizontal page overflow).
+- Additional browser checks passed: actuals toggle, 24-row hourly audit table, and next-day navigation updated both delivery date and forecast values.
+- Production Vercel deployment reached READY at https://q7m2x9.vercel.app.
+- The Vercel project is connected to `harshitdeora/q7m2x9` for automatic GitHub deployments, with user-approved access limited to this repository.
+- Unauthenticated production HTTP checks returned 200 for `/`, `/api/health`, `/api/decision`, `/api/accuracy`, and `/api/export`.
+- Production 31 January decision returned deliveryDate `2026-02-01`; production full-month statistics matched local calculations.
 
 ## In progress / remaining checks
 
-- Remaining browser interactions and public production verification.
-- Vercel deployment: single-repository integration approved by the user; GitHub identity verification / installation completion is still pending in the browser.
-- Public signed-out/private-window access checks after deployment.
+- The assignment's literal incognito-window access check is **not complete**. An attempt to select the native Brave window was blocked by the computer-use policy because it could not determine the current browser URL confidently. Browser interaction stopped at that point. Unauthenticated HTTP access succeeded, but is not claimed as an incognito check. Manually open the production URL and public repository in an incognito window before submission.
 - YouTube video has not been recorded or uploaded.
 
 This record is updated as checks complete. A configured workflow is not proof that it has passed.

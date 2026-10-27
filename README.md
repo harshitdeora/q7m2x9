@@ -5,7 +5,7 @@ A decision-support pilot for a Great Britain electricity buying desk. Inspect th
 ## Links
 
 - Public repository: https://github.com/harshitdeora/q7m2x9
-- Vercel application: deployment link will be recorded after a successful release.
+- Vercel application: https://q7m2x9.vercel.app
 - Video: **not yet recorded or uploaded**. The assignment requires an unlisted YouTube video before submission. See `docs/demo-script.md` for a timed customer and technical walkthrough. Do not submit the assignment without the video.
 
 ## Start the application
@@ -127,6 +127,8 @@ Tests cover the inclusive decision cutoff, rejection of later forecasts, missing
 ## Deploy on Vercel
 
 Import this repository into Vercel from the repository root. `vercel.json` builds the React static files with `@vercel/static-build` and exposes FastAPI with `@vercel/python`. `/api/*` is routed to Python; remaining paths use the React frontend. Keep project build overrides empty so the committed configuration is authoritative. No environment variables or paid integrations are needed. Vercel builds source directly; Docker remains the portable alternative.
+
+The existing production project `hunter-527a/q7m2x9` is connected to this GitHub repository. Pushes to `main` trigger Vercel deployments. The initial release was deployed using the authenticated Vercel CLI and verified through unauthenticated HTTP requests.
 
 ## AI disclosure
 

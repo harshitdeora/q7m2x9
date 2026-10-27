@@ -8,7 +8,8 @@
 - [x] Docker startup instructions and CI container build.
 - [x] Anonymous public repository name: `q7m2x9`.
 - [x] README with directory map, startup, assumptions and AI disclosure.
-- [ ] Successful Vercel release and README link.
+- [x] Successful Vercel release and README link: https://q7m2x9.vercel.app
+- [x] Unauthenticated HTTP access verified for production HTML, Python API and CSV export.
 - [ ] Signed-out/private-window access verification for submitted app and repository URLs.
 - [ ] Record the customer and technical demonstration, under 10 minutes total.
 - [ ] Upload the video to YouTube as Unlisted and add the watch link to README.
