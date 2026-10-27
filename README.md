@@ -18,247 +18,31 @@ A decision-support pilot for a Great Britain electricity buying desk. Inspect th
 
 **This is a historical analysis application.** Elexon supplies the predictions; the application selects and evaluates them. There is no new forecasting model, live daily refresh, or automatic electricity purchasing.
 
-## System architecture
-
-The application has two separate flows: an **offline data-preparation pipeline** and a **runtime analysis API**. Page requests read the committed snapshot; they do not call Elexon. The diagrams below render directly in GitHub's Markdown viewer.
-
-```mermaid
-flowchart TB
-    subgraph preparation["Offline preparation - run manually"]
-        source["Elexon public APIs<br/>WINDFOR + FUELHH WIND"]
-        ingest["scripts/ingest.py<br/>Download, filter, deduplicate, normalise"]
-        snapshot[("data/elexon.json.gz<br/>Historical forecast and actual records")]
-        manifest["data/manifest.json<br/>Source URLs, retrieval time, counts, checksum"]
-        source --> ingest
-        ingest --> snapshot
-        ingest --> manifest
-    end
-
-    subgraph runtime["Application runtime"]
-        user["Electricity buying analyst"]
-        ui["React + TypeScript + Recharts<br/>Decision workspace, accuracy, methodology"]
-        api["Python FastAPI<br/>backend/app.py<br/>Query validation and response formatting"]
-        analysis["backend/analysis.py<br/>As-of selection, hourly matching, metrics"]
-        cache["Process-local caches<br/>Indexed snapshot + monthly results"]
-        user -->|"Select date and cutoff"| ui
-        ui -->|"GET /api/*"| api
-        api --> analysis
-        analysis --> cache
-        cache -->|"Read once per process"| snapshot
-        api -->|"Read provenance"| manifest
-        analysis -->|"Selected rows and statistics"| api
-        api -->|"JSON or CSV"| ui
-        ui -->|"Charts, tables and downloads"| user
-    end
-```
-
-| Layer | Responsibility | Implementation |
-|---|---|---|
-| Data preparation | Retrieve and normalise the two Elexon datasets | Python standard library, bounded concurrent HTTP requests |
-| Storage | Preserve a reproducible historical input and its provenance | Compressed JSON and manifest committed to Git |
-| Analysis | Select forecasts known at the cutoff, align actuals, calculate errors | Pure Python functions with process-local caching |
-| API | Validate requests and return decision, accuracy, export and provenance results | FastAPI |
-| Presentation | Let analysts explore dates, charts, tables and assumptions | React, TypeScript, Recharts, CSS design tokens |
-| Delivery | Host the public sample and support portable local execution | Vercel; Docker as an alternative runtime |
-
-There is no database, background scheduler, message queue, or external API key in the current design. Caches are held in memory and may be rebuilt on each serverless cold start. They are not persistent storage.
-
-## Historical data pipeline
-
-Run `python scripts/ingest.py` explicitly to rebuild the snapshot. The data download is separate from page loads and from the Vercel build.
-
-```mermaid
-flowchart TD
-    run["Manual ingestion command"]
-    forecasts["WINDFOR stream<br/>Publication-date requests<br/>30 Dec 2025 to 31 Jan 2026"]
-    actuals["FUELHH stream<br/>Settlement-date requests<br/>2 Jan to 1 Feb 2026"]
-    fetch["Fetch JSON lists<br/>4 workers, 60-second request timeout<br/>Up to 4 attempts with backoff"]
-    valid{"Request succeeds<br/>and response is a list?"}
-    fail["Raise an error<br/>Do not publish a replacement snapshot"]
-    filter["For FUELHH: keep fuelType WIND"]
-    normalise["Keep startTime, publishTime, generation"]
-    dedupe["Deduplicate within each dataset<br/>Key: startTime + publishTime"]
-    sort["Sort by target and publication time<br/>Serialise normalised JSON"]
-    compressed[("Write data/elexon.json.gz")]
-    provenance["Write data/manifest.json<br/>Request URLs + retrieval time + record counts<br/>SHA-256 of uncompressed normalised JSON"]
-    commit["Commit snapshot and manifest to Git"]
-    deploy["Redeploy and restart backend processes<br/>New processes rebuild their caches"]
-
-    run --> forecasts
-    run --> actuals
-    forecasts --> fetch
-    actuals --> fetch
-    fetch --> valid
-    valid -->|"No, after retries"| fail
-    valid -->|"Yes"| filter
-    filter --> normalise --> dedupe --> sort
-    sort --> compressed
-    sort --> provenance
-    compressed --> commit
-    provenance --> commit
-    commit --> deploy
-```
-
-The initial snapshot contains **19,272 forecast records** and **1,488 actual half-hours**. Forecast records include multiple revisions for a target time. Early publications support January 1 cutoffs; February 1 actuals support January 31 purchase decisions. An exhausted request failure stops ingestion before the output-writing stage; it does not create synthetic fallback data. The two output files are written sequentially, so snapshot replacement should be performed offline and reviewed before committing.
-
-## Decision-time analysis pipeline
-
-The central rule is to reconstruct the information available to a buyer **at the selected cutoff**, separately for each next-day delivery hour.
-
-```mermaid
-flowchart TD
-    request["Input: January decision date + cutoff time"]
-    validation{"Valid January date<br/>and unzoned HH:MM time?"}
-    reject["HTTP 422<br/>Return validation error"]
-    dates["Build timezone-aware decision timestamp<br/>Delivery = next calendar day<br/>Generate 24 hourly target times"]
-    index["Load indexed snapshot<br/>Forecasts grouped by startTime<br/>Latest captured actual revision per startTime"]
-    each["For each delivery target h"]
-    eligible["Find forecasts for target h<br/>Keep publishTime at or before decision timestamp"]
-    found{"Any eligible forecast?"}
-    latest["Choose greatest eligible publishTime"]
-    missing["Forecast = null<br/>No future backfill or interpolation"]
-    halves["Read WIND actuals at h:00 and h:30"]
-    complete{"Both actual half-hours exist?"}
-    average["Hourly actual = mean of the two MW readings"]
-    unavailable["Actual = null"]
-    pair{"Forecast and actual<br/>both available?"}
-    error["Error in MW = forecast minus actual<br/>Include observation in accuracy metrics"]
-    exclude["Keep row and missing values<br/>Exclude unmatched pair from metrics"]
-    summaries["Return all 24 rows and coverage<br/>Available forecast energy, mean and peak<br/>MAE, RMSE, bias and P90 for matched pairs"]
-
-    request --> validation
-    validation -->|"No"| reject
-    validation -->|"Yes"| dates
-    dates --> index --> each --> eligible --> found
-    found -->|"Yes"| latest
-    found -->|"No"| missing
-    latest --> halves
-    missing --> halves
-    halves --> complete
-    complete -->|"Yes"| average
-    complete -->|"No"| unavailable
-    average --> pair
-    unavailable --> pair
-    pair -->|"Yes"| error
-    pair -->|"No"| exclude
-    error --> summaries
-    exclude --> summaries
-```
-
-**Example:** for a decision on **15 January at 10:00 GMT**, delivery is **16 January**. For each delivery hour, the code chooses its most recent forecast published no later than 10:00. A 09:30 publication is eligible; a 10:30 publication is not. A publication exactly at 10:00 is eligible. Actuals are added afterward for retrospective verification, never treated as information known at that purchase decision.
-
-The hourly forecast versus half-hour actual matching is an explicit pilot assumption, detailed in [Data and alignment](#data-and-alignment). An available forecast can contribute to forecast summaries even if its actual is missing; accuracy metrics require a matched pair. Zero generation is valid and is not treated as missing.
-
-### Monthly accuracy aggregation
+## Architecture
 
 ```mermaid
 flowchart LR
-    cutoff["Selected cutoff<br/>For example 10:00 GMT"]
-    days["Run decision analysis for<br/>each of 31 January decision dates"]
-    rows["Collect next-day hourly rows<br/>Maximum 744 matched observations"]
-    month["Full-month metrics<br/>Equal weight per matched hour"]
-    daily["Group by decision day<br/>Daily MAE, RMSE, bias and counts"]
-    hourly["Group by delivery hour<br/>Hourly MAE and other metrics"]
-    screen["Accuracy screen<br/>Summary cards, daily bars,<br/>hourly heatmap and audit table"]
-    cutoff --> days --> rows
-    rows --> month --> screen
-    rows --> daily --> screen
-    rows --> hourly --> screen
+    User["Buying analyst"] --> UI["React frontend"]
+    UI <-->|"HTTP API"| API["Python FastAPI backend"]
+    API <-->|"Read data"| Data[("Saved Elexon snapshot")]
 ```
 
-Monthly results are cached by cutoff, with a maximum of 48 cached summaries per process. The aggregate is calculated from individual observations, not an unweighted average of daily metrics. This entire full-month evaluation is **retrospective**; it is not a rolling error estimate available at every historical purchase decision.
+**For the video:** “The analyst uses React to explore the data. The Python backend reads the saved Elexon data and returns forecasts and accuracy results. The app is hosted on Vercel; Docker supports local execution.”
 
-## Browser-to-backend request flow
+## Data pipeline
 
 ```mermaid
-sequenceDiagram
-    actor Analyst
-    participant UI as React browser application
-    participant API as FastAPI
-    participant Engine as Python analysis functions
-    participant Data as Bundled snapshot and caches
-
-    Analyst->>UI: Select decision date and cutoff
-    Note over UI: Abort previous requests if controls change
-    par Selected-day analysis
-        UI->>API: GET /api/decision?day=2026-01-15&cutoff=10:00
-        API->>Engine: decision(day, cutoff)
-        Engine->>Data: Read indexed forecasts and actuals
-        Data-->>Engine: Cached records or first-load snapshot
-        Engine-->>API: 24 hourly rows, coverage and daily metrics
-        API-->>UI: Decision JSON
-    and Monthly evaluation
-        UI->>API: GET /api/accuracy?cutoff=10:00
-        API->>Engine: month(cutoff)
-        Engine-->>API: Cached or calculated monthly summary
-        API-->>UI: Monthly, daily and delivery-hour JSON
-    and Source provenance
-        UI->>API: GET /api/provenance
-        API->>Data: Read manifest.json
-        Data-->>API: Source URLs, retrieval time, counts, checksum
-        API-->>UI: Provenance JSON
-    end
-    Note over UI: Render results when all three requests succeed<br/>Otherwise show loading or retryable error state
-    UI-->>Analyst: Charts, statistics, coverage and assumptions
-    Analyst->>UI: Export selected-day data
-    UI->>API: GET /api/export?day=2026-01-15&cutoff=10:00
-    API->>Engine: Reuse decision analysis
-    Engine-->>API: Selected hourly rows
-    API-->>Analyst: CSV attachment
+flowchart LR
+    Source["Elexon forecasts<br/>and actuals"] --> Save["Download and save<br/>historical data"]
+    Save --> Select["Select forecasts published<br/>by the decision time"]
+    Select --> Match["Match forecasts<br/>with actual generation"]
+    Match --> Calculate["Calculate errors<br/>MAE, RMSE, bias, P90"]
+    Calculate --> Show["Display charts<br/>and export CSV"]
 ```
 
-| Endpoint | Inputs | Output |
-|---|---|---|
-| `GET /api/decision` | `day`, `cutoff` | Selected next-day forecasts, actuals, publication times, coverage, energy and daily error metrics |
-| `GET /api/accuracy` | `cutoff` | Whole-month metrics, per-decision-day results and per-delivery-hour results |
-| `GET /api/export` | `day`, `cutoff` | Selected-day CSV with forecast, actual, error, publication time, age and actual-half-hour count |
-| `GET /api/provenance` | None | Source manifest and checksum |
-| `GET /api/health` | None | Basic service status; not a full data-integrity check |
-| `GET /api/docs` | None | Interactive FastAPI documentation |
+**For the video:** “We download forecasts and actuals from Elexon, keep only forecasts available at the selected decision time, compare them with actual generation, and show the errors in charts.”
 
-## Build and deployment pipeline
-
-GitHub Actions verification and Vercel deployment are **separate processes triggered by a push**. The current configuration does not make Vercel wait for the GitHub Actions job to pass. Docker is an alternative local runtime, not the image deployed to Vercel.
-
-```mermaid
-flowchart TB
-    change["Developer updates source or snapshot"]
-    push["Commit and push to GitHub main"]
-    change --> push
-
-    subgraph ci["GitHub Actions - verification"]
-        checkout["Check out repository<br/>Set up Python 3.12 and Node 22"]
-        py["Install Python dependencies<br/>Run 10 backend and API tests"]
-        js["npm ci<br/>TypeScript check and Vite build"]
-        imagecheck["Build Docker image"]
-        checkout --> py --> js --> imagecheck
-    end
-
-    subgraph vercel["Vercel - production hosting"]
-        build["Build from connected GitHub source<br/>Configuration: vercel.json"]
-        static["Static builder<br/>Compile React to dist"]
-        python["Python builder<br/>api/index.py + backend + data"]
-        routing["Vercel routing<br/>API paths to Python<br/>Assets to static hosting<br/>Remaining paths to index.html"]
-        live["q7m2x9.vercel.app"]
-        build --> static --> routing
-        build --> python --> routing
-        routing --> live
-    end
-
-    subgraph portable["Docker Compose - alternative local runtime"]
-        docker["docker compose up --build"]
-        node["Stage 1: Node 22<br/>Build React assets"]
-        runtime["Stage 2: Python 3.12<br/>Copy backend, data and built frontend<br/>Run Uvicorn as non-root user"]
-        local["localhost:8000<br/>FastAPI serves API and static frontend"]
-        docker --> node --> runtime --> local
-    end
-
-    push --> checkout
-    push --> build
-    change --> docker
-```
-
-The public application reads only public historical data and requires no runtime secrets. GitHub and Vercel authentication are used for publishing and deployment administration, not for retrieving the dataset while someone uses the app.
+The snapshot is fixed, not refreshed daily. Two half-hour actual readings are averaged for each hourly comparison. Actuals and accuracy results are retrospective.
 
 ## Start the application
 
