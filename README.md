@@ -6,7 +6,6 @@ A decision-support pilot for a Great Britain electricity buying desk. Inspect th
 
 - [Public GitHub repository](https://github.com/harshitdeora/q7m2x9)
 - [Live application on Vercel](https://q7m2x9.vercel.app)
-- Video: **not yet recorded or uploaded**. The assignment requires an unlisted YouTube video before submission. See `docs/demo-script.md` for a timed customer and technical walkthrough. Do not submit the assignment without the video.
 
 ## Product at a glance
 
@@ -27,7 +26,7 @@ flowchart LR
     API <-->|"Read data"| Data[("Saved Elexon snapshot")]
 ```
 
-**For the video:** “The analyst uses React to explore the data. The Python backend reads the saved Elexon data and returns forecasts and accuracy results. The app is hosted on Vercel; Docker supports local execution.”
+The React frontend communicates with a Python FastAPI backend, which reads the saved Elexon snapshot and returns forecasts and accuracy results. Vercel hosts the application; Docker supports local execution.
 
 ## Data pipeline
 
@@ -40,7 +39,7 @@ flowchart LR
     Calculate --> Show["Display charts<br/>and export CSV"]
 ```
 
-**For the video:** “We download forecasts and actuals from Elexon, keep only forecasts available at the selected decision time, compare them with actual generation, and show the errors in charts.”
+The pipeline downloads Elexon forecasts and actuals, selects forecasts available at the decision cutoff, aligns them with actual generation, and calculates error metrics for the dashboard.
 
 The snapshot is fixed, not refreshed daily. Two half-hour actual readings are averaged for each hourly comparison. Actuals and accuracy results are retrospective.
 
@@ -93,7 +92,7 @@ Only the two requested Elexon datasets are used:
 - [WINDFOR stream](https://bmrs.elexon.co.uk/api-documentation/endpoint/datasets/WINDFOR/stream): published wind forecasts.
 - [FUELHH stream](https://bmrs.elexon.co.uk/api-documentation/endpoint/datasets/FUELHH/stream): actual generation, filtered to `fuelType=WIND`.
 
-Although the brief describes matching target times, the **retrieved January WINDFOR records have hourly target timestamps**. FUELHH actuals have half-hourly targets. We explicitly align each hourly forecast at `h:00` to the mean of the actuals at `h:00` and `h:30`. Both actual half-hours must exist; otherwise the hour is excluded from metrics. No interpolated half-hour forecasts are invented. This treats the forecast as representative hourly power, a documented pilot assumption that should be confirmed with the client before operational use. Elexon describes its wind forecast and metered-wind coverage [here](https://bmrs.elexon.co.uk/wind-generation).
+The **retrieved January WINDFOR records have hourly target timestamps**. FUELHH actuals have half-hourly targets. We explicitly align each hourly forecast at `h:00` to the mean of the actuals at `h:00` and `h:30`. Both actual half-hours must exist; otherwise the hour is excluded from metrics. No interpolated half-hour forecasts are invented. This treats the forecast as representative hourly power, a documented pilot assumption that should be confirmed with the client before operational use. Elexon describes its wind forecast and metered-wind coverage [here](https://bmrs.elexon.co.uk/wind-generation).
 
 Forecast generation and actual generation are power in **MW**. The chart displays GW. Daily energy = sum of hourly forecast MW × 1 hour, divided by 1,000 for GWh. Partial coverage produces a partial total, accompanied by its coverage count. Actual revisions are resolved using the latest publication captured in the snapshot.
 
@@ -140,7 +139,7 @@ q7m2x9/
 ├── scripts/ingest.py        Manual snapshot preparation
 ├── tests/test_analysis.py   Backend, data-contract and API verification
 ├── .github/workflows/       Automated checks
-├── docs/                    Handover, demo script and submission checks
+├── docs/                    Supporting documentation
 ├── Dockerfile               Two-stage frontend and backend build
 ├── compose.yaml             Local container runtime and health check
 ├── vercel.json              Static and Python hosting configuration
@@ -164,7 +163,7 @@ q7m2x9/
 | `scripts/ingest.py` | Download and normalise the public Elexon data |
 | `tests/test_analysis.py` | Algorithm, boundaries, data integrity and API tests |
 | `.github/workflows/checks.yml` | Automated backend tests, frontend build and Docker build |
-| `docs/` | Technical handover, demo script and submission checklist |
+| `docs/` | Supporting documentation and verification notes |
 | `Dockerfile`, `compose.yaml` | Two-stage frontend/Python container and local startup |
 | `vercel.json` | Static React build and Python function routing on Vercel |
 | `package-lock.json`, `requirements.txt` | Frontend lockfile and pinned direct Python dependencies |
@@ -193,4 +192,4 @@ The existing production project `hunter-527a/q7m2x9` is connected to this GitHub
 
 ## Pilot limitations
 
-This bounded version prioritises a reviewable product within the assignment's 16-hour budget. It uses a fixed historical snapshot and process-local caches, with no database, live refresh, automatic bidding, or uncertainty model. A production version would need agreed gate times, source semantics validated with the client, portfolio/demand data, monitored ingestion, persistent storage, broader time coverage, and decision-time historical error estimates. No claimed financial savings have been inferred from these two datasets.
+This historical pilot uses a fixed snapshot and process-local caches, with no database, live refresh, automatic bidding, or uncertainty model. A production version would need agreed gate times, source semantics validated with the client, portfolio/demand data, monitored ingestion, persistent storage, broader time coverage, and decision-time historical error estimates. No claimed financial savings have been inferred from these two datasets.
